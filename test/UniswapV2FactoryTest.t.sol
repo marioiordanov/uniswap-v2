@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.20;
+pragma solidity 0.8.22;
 
 import {Test, console} from "forge-std/Test.sol";
 import {UniswapV2Factory} from "../src/UniswapV2Factory.sol";
 import {UniswapV2Pair} from "../src/UniswapV2Pair.sol";
+import {BaseTest} from "./BaseTest.t.sol";
 
-contract UniswapV2FactoryTest is Test {
-    event PairCreated(
-        address indexed pair,
-        address indexed token0,
-        address indexed token1
-    );
-
+contract UniswapV2FactoryTest is BaseTest {
     UniswapV2Factory private factory;
     address private tokenA = makeAddr("first token");
     address private tokenB = makeAddr("second token");
@@ -99,35 +94,12 @@ contract UniswapV2FactoryTest is Test {
         (address token0, address token1) = tokenA < tokenB
             ? (tokenA, tokenB)
             : (tokenB, tokenA);
-        emit PairCreated(
+        emit UniswapV2Factory.PairCreated(
             calculatePairAddress(address(factory), tokenA, tokenB),
             token0,
             token1
         );
 
         factory.createPair(tokenA, tokenB);
-    }
-
-    function calculatePairAddress(
-        address _factory,
-        address _tokenA,
-        address _tokenB
-    ) private pure returns (address pair) {
-        (address token0, address token1) = _tokenA < _tokenB
-            ? (_tokenA, _tokenB)
-            : (_tokenB, _tokenA);
-
-        bytes32 salt = keccak256(abi.encodePacked(token0, token1));
-
-        bytes memory bytecode = abi.encodePacked(
-            type(UniswapV2Pair).creationCode,
-            abi.encode(token0, token1)
-        );
-        bytes32 hash = keccak256(
-            abi.encodePacked(bytes1(0xff), _factory, salt, keccak256(bytecode))
-        );
-
-        // NOTE: cast last 20 bytes of hash to address
-        return address(uint160(uint256(hash)));
     }
 }
