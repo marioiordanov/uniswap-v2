@@ -25,7 +25,18 @@ contract UniswapV2FactoryTest is Test {
         factory = new UniswapV2Factory();
     }
 
-    function testCreatePairWithTheSameTokensReverts() public {
+    function testFuzz_CreatePairIsSuccessful(
+        address token0,
+        address token1
+    ) public {
+        vm.assume(token0 != token1);
+        vm.assume(token0 != address(0));
+        vm.assume(token1 != address(0));
+
+        factory.createPair(token0, token1);
+    }
+
+    function test_CreatePairWithTheSameTokensReverts() public {
         address token = address(1);
         vm.expectRevert(
             UniswapV2Factory.AddressesInPairCannotBeTheSame.selector
@@ -33,12 +44,12 @@ contract UniswapV2FactoryTest is Test {
         factory.createPair(token, token);
     }
 
-    function testCreatePairWithZeroAddressReverts() public {
+    function test_CreatePairWithZeroAddressReverts() public {
         vm.expectRevert(UniswapV2Factory.ZeroAddressNotAllowed.selector);
         factory.createPair(address(1), address(0));
     }
 
-    function testGetPairWithSameArgumentsButDifferentPositions()
+    function test_GetPairWithSameArgumentsButDifferentPositions()
         public
         createPair
     {
@@ -48,12 +59,12 @@ contract UniswapV2FactoryTest is Test {
         );
     }
 
-    function testCreateAlreadyCreatedPairReverts() public createPair {
+    function test_CreateAlreadyCreatedPairReverts() public createPair {
         vm.expectRevert(UniswapV2Factory.PairAlreadyExists.selector);
         factory.createPair(tokenA, tokenB);
     }
 
-    function testEncodePackedIsCorrectWayOfProducingTheHash()
+    function test_EncodePackedIsCorrectWayOfProducingTheHash()
         public
         createPair
     {
@@ -64,7 +75,7 @@ contract UniswapV2FactoryTest is Test {
         assert(factory.pairs(hash) != address(0));
     }
 
-    function testOrderOfTokenMatters() public createPair {
+    function test_OrderOfTokenMatters() public createPair {
         address pairAB = factory.pairs(
             keccak256(abi.encodePacked(tokenA, tokenB))
         );
@@ -75,7 +86,7 @@ contract UniswapV2FactoryTest is Test {
         assert(pairAB != pairBA);
     }
 
-    function testCalculateAddressPairCalculatesTheSameAddressAsFactoryCreatePair()
+    function test_CalculateAddressPairCalculatesTheSameAddressAsFactoryCreatePair()
         public
     {
         address pair = factory.createPair(tokenA, tokenB);
@@ -83,7 +94,7 @@ contract UniswapV2FactoryTest is Test {
         assertEq(pair, calculatePairAddress(address(factory), tokenA, tokenB));
     }
 
-    function testEventIsEmitted() public {
+    function test_EventIsEmitted() public {
         vm.expectEmit(true, true, true, false, address(factory));
         (address token0, address token1) = tokenA < tokenB
             ? (tokenA, tokenB)
