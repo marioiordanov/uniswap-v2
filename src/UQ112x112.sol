@@ -10,7 +10,7 @@ library UQ112x112 {
     uint224 constant Q112 = 112;
 
     // encode a uint112 as a UQ112x112
-    function encode(uint112 y) internal view returns (uint224 z) {
+    function encode(uint112 y) internal pure returns (uint224 z) {
         z = uint224(y) << Q112; // never overflows
     }
 
@@ -21,11 +21,11 @@ library UQ112x112 {
 }
 
 contract UQ112x112Wrapper {
-    function encode(uint112 x) public view returns (uint224) {
+    function encode(uint112 x) public pure returns (uint224) {
         return UQ112x112.encode(x);
     }
 
-    function uqdiv(uint224 x, uint112 y) public view returns (uint224 z) {
+    function uqdiv(uint224 x, uint112 y) public pure returns (uint224 z) {
         return UQ112x112.uqdiv(x, y);
     }
 }
