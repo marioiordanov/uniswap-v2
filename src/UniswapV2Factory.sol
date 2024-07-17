@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.20;
+pragma solidity 0.8.22;
 import {UniswapV2Pair} from "./UniswapV2Pair.sol";
 
 contract UniswapV2Factory {
@@ -12,6 +12,7 @@ contract UniswapV2Factory {
         address indexed token0,
         address indexed token1
     );
+
     // errors
     error PairAlreadyExists();
     error ZeroAddressNotAllowed();
