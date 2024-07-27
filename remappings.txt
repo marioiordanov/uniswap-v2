@@ -1,2 +1,3 @@
 @solady/tokens@v0.0.217=lib/solady/src/tokens/
 @solady/utils@v0.0.217=lib/solady/src/utils/
+@openzeppelin/contracts@v5.0.2=lib/openzeppelin-contracts/contracts/
