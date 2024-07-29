@@ -9,6 +9,7 @@ import {WETH} from "@solady/tokens@v0.0.217/WETH.sol";
 import {FixedPointMathLib} from "@solady/utils@v0.0.217/FixedPointMathLib.sol";
 import {BaseTest} from "./BaseTest.t.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts@v5.0.2/token/ERC20/extensions/IERC20Metadata.sol";
+import {UQ112x112} from "../src/UQ112x112.sol";
 
 contract InternalFunctionsWrapper is UniswapV2Pair {
     constructor(address token0, address token1) UniswapV2Pair(token0, token1) {}
@@ -449,5 +450,44 @@ contract UniswapV2PairTest is BaseTest {
 
         assertEq(usdc.balanceOf(USER1), usdcInitialBalance - usdcIn + usdcOut);
         assertEq(weth.balanceOf(USER1), wethInitialBalance - wethIn + wethOut);
+    }
+
+    function test_PriceAtInitialMintingIsNotBeingAccumulated()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        assert(pair.price0Cumulative() == 0);
+        assert(pair.price1Cumulative() == 0);
+    }
+
+    function test_Price3SecondsAfterInitialMintingAccumulatesCorrectly()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        uint256 secondsPassed = 3;
+        vm.warp(block.timestamp + secondsPassed);
+
+        vm.startPrank(USER2);
+        usdc.transfer(address(pair), 100e6);
+        weth.transfer(address(pair), 1e18);
+
+        pair.mint(USER2, 1);
+
+        // price 1 => 1000 usdc / 10 weth => 1weth = 100 usdc
+        // price 0 => 10 weth / 1000 usdc => 1usdc = 0.01 weth
+
+        // check price 0 cumulative
+        // have to be 3*10e18/1000e6 / 2**112
+        uint256 expectedPrice0Cumulative = (secondsPassed * 10e18) / 1000e6;
+        // then have to be checked against data from contract, with removed implied denominator
+        assertEq(
+            expectedPrice0Cumulative,
+            pair.price0Cumulative() >> UQ112x112.Q112
+        );
+
+        // for price 1 implied denominator must not be removed, because in the denominator there are more decimals
+        uint256 expectedPrice1Cumulative = 3 *
+            ((1000e6 << UQ112x112.Q112) / 10e18);
+        assertEq(expectedPrice1Cumulative, pair.price1Cumulative());
     }
 }

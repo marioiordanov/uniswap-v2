@@ -7,29 +7,41 @@ import {FixedPointMathLib} from "@solady/utils@v0.0.217/FixedPointMathLib.sol";
 import {SafeERC20} from "@openzeppelin/contracts@v5.0.2/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts@v5.0.2/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts@v5.0.2/token/ERC20/extensions/IERC20Metadata.sol";
+import {UQ112x112} from "./UQ112x112.sol";
 
 contract UniswapV2Pair is ERC20 {
     using FixedPointMathLib for uint256;
+    using UQ112x112 for uint224;
     enum ReentrancyState {
         NON_ENTERED,
         ENTERED
     }
 
-    uint16 private constant BASIS_POINTS_UPPER_BOUND = 10_000;
-    uint16 private constant DEFAULT_BASIS_POINTS_TOLERANCE = 100;
+    uint16 public constant BASIS_POINTS_UPPER_BOUND = 10_000;
+    uint16 public constant DEFAULT_BASIS_POINTS_TOLERANCE = 100;
+    uint256 private constant TIMESTAMP_MODULO_ARGUMENT = 1 << 32; // equal to 2^32
 
     uint256 public constant MINIMUM_LIQUIDITY = 1e3;
     // 0.3% fee
     uint256 public constant SWAP_FEE_NUMERATOR = 3;
     uint256 public constant SWAP_FEE_DENOMINATOR = 1000;
 
+    // state variables
+    // slot 0
+    ReentrancyState private state;
     IERC20 public immutable token0;
+    // slot 1
     IERC20 public immutable token1;
 
+    // slot 2
     uint112 public reserve0;
     uint112 public reserve1;
+    uint32 public lastUpdatedBlocktimestamp;
 
-    ReentrancyState private state;
+    // slot 3
+    uint256 public price0Cumulative;
+    // slot 4
+    uint256 public price1Cumulative;
 
     // events
     event PairCreated(address indexed token0, address indexed token1);
@@ -238,13 +250,34 @@ contract UniswapV2Pair is ERC20 {
     }
 
     ///
-    function _update(uint256 balance0, uint256 balance1) internal {
+    function _update(uint256 _balance0, uint256 _balance1) internal {
         unchecked {
-            if (balance0 > type(uint112).max || balance1 > type(uint112).max) {
+            if (
+                _balance0 > type(uint112).max || _balance1 > type(uint112).max
+            ) {
                 revert ReserveOverflowed();
             }
-            reserve0 = uint112(balance0);
-            reserve1 = uint112(balance1);
+
+            uint32 blockTimestamp = uint32(
+                block.timestamp % TIMESTAMP_MODULO_ARGUMENT
+            );
+
+            uint32 timeElapsed = blockTimestamp - lastUpdatedBlocktimestamp;
+
+            // to avoid accumulating price when at first there was no liquidity
+            if (timeElapsed > 0 && reserve0 > 0 && reserve1 > 0) {
+                price0Cumulative +=
+                    UQ112x112.encode(reserve1).uqdiv(reserve0) *
+                    timeElapsed;
+                price1Cumulative +=
+                    UQ112x112.encode(reserve0).uqdiv(reserve1) *
+                    timeElapsed;
+            }
+
+            reserve0 = uint112(_balance0);
+            reserve1 = uint112(_balance1);
+            // it will always be less than 2^32 due to modulo division
+            lastUpdatedBlocktimestamp = blockTimestamp;
 
             emit ReservesUpdated();
         }
