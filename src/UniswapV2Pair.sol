@@ -296,7 +296,11 @@ contract UniswapV2Pair is ERC20 {
     /// @notice Calculates the fee for the flash loan
     /// @dev Rounds up
     function _getFee(uint256 _amount) internal pure returns (uint256) {
-        return 1 + (_amount * SWAP_FEE_NUMERATOR) / SWAP_FEE_DENOMINATOR;
+        uint256 product = _amount * SWAP_FEE_NUMERATOR;
+        return
+            product /
+            SWAP_FEE_DENOMINATOR +
+            (product % SWAP_FEE_DENOMINATOR == 0 ? 0 : 1);
     }
 
             if (_amount0Out > 0) {

@@ -495,14 +495,20 @@ contract UniswapV2PairTest is BaseTest {
         assertEq(expectedPrice1Cumulative, pair.price1Cumulative());
     }
 
-    function test_GetFeeRoundsUp() public {
+    function test_GetFeeRoundsUpWhenThereIsFractionPart() public {
         InternalFunctionsWrapper wrapper = new InternalFunctionsWrapper(
             address(4),
             address(5)
         );
-        uint256 amount = 3333;
-        uint256 fee = wrapper.getFee(amount);
-        uint256 expectedFee = 10;
-        assertEq(fee, expectedFee);
+        assertEq(wrapper.getFee(3333), 10);
+    }
+
+    function test_GetFeeDoesntRoundUpWhenThereIsNoFractionPart() public {
+        InternalFunctionsWrapper wrapper = new InternalFunctionsWrapper(
+            address(4),
+            address(5)
+        );
+
+        assertEq(wrapper.getFee(1000), 3);
     }
 }
