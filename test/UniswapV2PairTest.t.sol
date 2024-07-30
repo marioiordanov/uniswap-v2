@@ -17,6 +17,10 @@ contract InternalFunctionsWrapper is UniswapV2Pair {
     function updateWrapper(uint256 balance0, uint256 balance1) external {
         _update(balance0, balance1);
     }
+
+    function getFee(uint256 amount) external pure returns (uint256) {
+        return _getFee(amount);
+    }
 }
 
 contract UniswapV2PairTest is BaseTest {
@@ -489,5 +493,16 @@ contract UniswapV2PairTest is BaseTest {
         uint256 expectedPrice1Cumulative = 3 *
             ((1000e6 << UQ112x112.Q112) / 10e18);
         assertEq(expectedPrice1Cumulative, pair.price1Cumulative());
+    }
+
+    function test_GetFeeRoundsUp() public {
+        InternalFunctionsWrapper wrapper = new InternalFunctionsWrapper(
+            address(4),
+            address(5)
+        );
+        uint256 amount = 3333;
+        uint256 fee = wrapper.getFee(amount);
+        uint256 expectedFee = 10;
+        assertEq(fee, expectedFee);
     }
 }

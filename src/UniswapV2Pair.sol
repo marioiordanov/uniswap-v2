@@ -293,17 +293,11 @@ contract UniswapV2Pair is ERC20 {
             revert InvalidBasisPoints();
         }
         (uint112 _reserve0, uint112 _reserve1) = getReserves();
-
-        uint256 balance0;
-        uint256 balance1;
-        uint256 amount1In;
-        uint256 amount0In;
-
-        // stack too deep error
-        {
-            if (_amount0Out > reserve0 || _amount1Out > reserve1) {
-                revert NotEnoughLiquidityForSwap();
-            }
+    /// @notice Calculates the fee for the flash loan
+    /// @dev Rounds up
+    function _getFee(uint256 _amount) internal pure returns (uint256) {
+        return 1 + (_amount * SWAP_FEE_NUMERATOR) / SWAP_FEE_DENOMINATOR;
+    }
 
             if (_amount0Out > 0) {
                 SafeERC20.safeTransfer(token0, _to, _amount0Out);
