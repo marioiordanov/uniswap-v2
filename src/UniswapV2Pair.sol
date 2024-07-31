@@ -8,8 +8,10 @@ import {SafeERC20} from "@openzeppelin/contracts@v5.0.2/token/ERC20/utils/SafeER
 import {IERC20} from "@openzeppelin/contracts@v5.0.2/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts@v5.0.2/token/ERC20/extensions/IERC20Metadata.sol";
 import {UQ112x112} from "./UQ112x112.sol";
+import {IERC3156FlashLender} from "@openzeppelin/contracts@v5.0.2/interfaces/IERC3156FlashLender.sol";
+import {IERC3156FlashBorrower} from "@openzeppelin/contracts@v5.0.2/interfaces/IERC3156FlashBorrower.sol";
 
-contract UniswapV2Pair is ERC20 {
+contract UniswapV2Pair is ERC20, IERC3156FlashLender {
     using FixedPointMathLib for uint256;
     using UQ112x112 for uint224;
     enum ReentrancyState {
@@ -17,9 +19,18 @@ contract UniswapV2Pair is ERC20 {
         ENTERED
     }
 
+    struct SwapCalculations {
+        uint256 balance0;
+        uint256 balance1;
+        uint256 amount0In;
+        uint256 amount1In;
+    }
+
     uint16 public constant BASIS_POINTS_UPPER_BOUND = 10_000;
     uint16 public constant DEFAULT_BASIS_POINTS_TOLERANCE = 100;
     uint256 private constant TIMESTAMP_MODULO_ARGUMENT = 1 << 32; // equal to 2^32
+    bytes32 private constant FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT =
+        keccak256("ERC3156FlashBorrower.onFlashLoan");
 
     uint256 public constant MINIMUM_LIQUIDITY = 1e3;
     // 0.3% fee
@@ -77,6 +88,8 @@ contract UniswapV2Pair is ERC20 {
     error KEquationDoesntHeld();
     error OverpayedForSwap();
     error InvalidBasisPoints();
+    error TokenNotSupportedForFlashLoan();
+    error FlashLoanReceiverDoesntImplementOnFlashLoan();
 
     // modifiers
     modifier nonReentrant() {
@@ -127,6 +140,76 @@ contract UniswapV2Pair is ERC20 {
         _swap(_amount0Out, _amount1Out, _to, _toleranceBasisPoints);
     }
 
+    function flashLoan(
+        IERC3156FlashBorrower receiver,
+        address token,
+        uint256 amount,
+        bytes calldata data
+    ) external override nonReentrant returns (bool) {
+        uint256 amount0Out = 0;
+        uint256 amount1Out = 0;
+        address receiverAddress = address(receiver);
+        if (token == address(token0)) {
+            amount0Out = amount;
+        } else if (token == address(token1)) {
+            amount1Out = amount;
+        } else {
+            revert TokenNotSupportedForFlashLoan();
+        }
+
+        (uint112 _reserve0, uint112 _reserve1) = getReserves();
+        {
+            // calculate the fee
+            uint256 fee = _getFee(amount);
+
+            _swapSendTokens(
+                amount0Out,
+                amount1Out,
+                receiverAddress,
+                _reserve0,
+                _reserve1
+            );
+
+            // send amount of token to receiver
+            if (
+                receiver.onFlashLoan(msg.sender, token, amount, fee, data) !=
+                FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT
+            ) {
+                revert FlashLoanReceiverDoesntImplementOnFlashLoan();
+            }
+
+            // transferFrom tokens back to the pair
+
+            SafeERC20.safeTransferFrom(
+                IERC20(token),
+                receiverAddress,
+                address(this),
+                amount + fee
+            );
+
+            SwapCalculations memory calculations = _doSwap(
+                _reserve0,
+                _reserve1,
+                amount0Out,
+                amount1Out,
+                false,
+                0
+            );
+
+            _update(calculations.balance0, calculations.balance1);
+            emit Swap(
+                receiverAddress,
+                amount0Out,
+                amount1Out,
+                calculations.amount1In,
+                calculations.amount0In,
+                receiverAddress
+            );
+        }
+
+        return true;
+    }
+
     /// @notice Provides liquidity to the Uniswap V2 pair. User have to send the tokens to the pair contract as part of a transaction
     /// @dev Reverts if minted tokens are less than minLPTokensOut
     /// @param _to the address that will receive the LP tokens
@@ -134,7 +217,7 @@ contract UniswapV2Pair is ERC20 {
     function mint(
         address _to,
         uint256 _minLiquidityMinted
-    ) external returns (uint256 liquidity) {
+    ) external nonReentrant returns (uint256 liquidity) {
         if (_to == address(0)) {
             revert ReceiverCannotBeZeroAddress();
         }
@@ -217,6 +300,29 @@ contract UniswapV2Pair is ERC20 {
         emit LiquidityBurned(liquidityTokens, amount0Out, amount1Out);
     }
 
+    function maxFlashLoan(
+        address token
+    ) external view override returns (uint256) {
+        if (token == address(token0)) {
+            return reserve0;
+        } else if (token == address(token1)) {
+            return reserve1;
+        } else {
+            return 0;
+        }
+    }
+
+    function flashFee(
+        address token,
+        uint256 amount
+    ) external view override returns (uint256) {
+        if (token != address(token0) && token != address(token1)) {
+            revert TokenNotSupportedForFlashLoan();
+        }
+
+        return _getFee(amount);
+    }
+
     function getReserves() public view returns (uint112, uint112) {
         return (reserve0, reserve1);
     }
@@ -249,7 +355,6 @@ contract UniswapV2Pair is ERC20 {
             );
     }
 
-    ///
     function _update(uint256 _balance0, uint256 _balance1) internal {
         unchecked {
             if (
@@ -293,46 +398,100 @@ contract UniswapV2Pair is ERC20 {
             revert InvalidBasisPoints();
         }
         (uint112 _reserve0, uint112 _reserve1) = getReserves();
-    /// @notice Calculates the fee for the flash loan
-    /// @dev Rounds up
-    function _getFee(uint256 _amount) internal pure returns (uint256) {
-        uint256 product = _amount * SWAP_FEE_NUMERATOR;
-        return
-            product /
-            SWAP_FEE_DENOMINATOR +
-            (product % SWAP_FEE_DENOMINATOR == 0 ? 0 : 1);
+        _swapSendTokens(_amount0Out, _amount1Out, _to, _reserve0, _reserve1);
+
+        SwapCalculations memory calculations = _doSwap(
+            _reserve0,
+            _reserve1,
+            _amount0Out,
+            _amount1Out,
+            true,
+            _toleranceBasisPoints
+        );
+
+        _update(calculations.balance0, calculations.balance1);
+        emit Swap(
+            msg.sender,
+            _amount0Out,
+            _amount1Out,
+            calculations.amount1In,
+            calculations.amount0In,
+            _to
+        );
     }
 
-            if (_amount0Out > 0) {
-                SafeERC20.safeTransfer(token0, _to, _amount0Out);
-            }
+    /// @notice Calculates the fee for the flash loan
+    /// @dev Rounds up
+    /// @dev calculates the fee as if the amount + fee is to be reduced by 0.3%
+    function _getFee(uint256 _amount) internal pure returns (uint256) {
+        uint256 product = _amount * SWAP_FEE_DENOMINATOR;
 
-            if (_amount1Out > 0) {
-                SafeERC20.safeTransfer(token1, _to, _amount1Out);
-            }
+        return
+            product /
+            (SWAP_FEE_DENOMINATOR - SWAP_FEE_NUMERATOR) +
+            (
+                product % (SWAP_FEE_DENOMINATOR - SWAP_FEE_NUMERATOR) == 0
+                    ? 0
+                    : 1
+            ) -
+            _amount;
+    }
 
-            balance0 = token0.balanceOf(address(this));
-            balance1 = token1.balanceOf(address(this));
+    function _swapSendTokens(
+        uint256 _amount0Out,
+        uint256 _amount1Out,
+        address _to,
+        uint112 _reserve0,
+        uint112 _reserve1
+    ) private {
+        if (_amount0Out > _reserve0 || _amount1Out > _reserve1) {
+            revert NotEnoughLiquidityForSwap();
+        }
 
-            amount0In = balance0 > _reserve0 - _amount0Out
-                ? balance0 - (_reserve0 - _amount0Out)
+        if (_amount0Out > 0) {
+            SafeERC20.safeTransfer(token0, _to, _amount0Out);
+        }
+
+        if (_amount1Out > 0) {
+            SafeERC20.safeTransfer(token1, _to, _amount1Out);
+        }
+    }
+
+    function _doSwap(
+        uint112 _reserve0,
+        uint112 _reserve1,
+        uint256 _amount0Out,
+        uint256 _amount1Out,
+        bool checkTolerance,
+        uint16 _toleranceBasisPoints
+    ) private view returns (SwapCalculations memory calculations) {
+        // stack too deep error
+        {
+            calculations.balance0 = token0.balanceOf(address(this));
+            calculations.balance1 = token1.balanceOf(address(this));
+
+            calculations.amount0In = calculations.balance0 >
+                _reserve0 - _amount0Out
+                ? calculations.balance0 - (_reserve0 - _amount0Out)
                 : 0;
-            amount1In = balance1 > _reserve1 - _amount1Out
-                ? balance1 - (_reserve1 - _amount1Out)
+            calculations.amount1In = calculations.balance1 >
+                _reserve1 - _amount1Out
+                ? calculations.balance1 - (_reserve1 - _amount1Out)
                 : 0;
 
-            uint256 balance0Adjusted = balance0 *
+            uint256 balance0Adjusted = calculations.balance0 *
                 SWAP_FEE_DENOMINATOR -
-                amount0In *
+                calculations.amount0In *
                 SWAP_FEE_NUMERATOR;
 
-            uint256 balance1Adjusted = balance1 *
+            uint256 balance1Adjusted = calculations.balance1 *
                 SWAP_FEE_DENOMINATOR -
-                amount1In *
+                calculations.amount1In *
                 SWAP_FEE_NUMERATOR;
 
             uint256 amountInWithFeeProduct = balance0Adjusted *
                 balance1Adjusted;
+
             uint256 currentK = _reserve0 *
                 _reserve1 *
                 SWAP_FEE_DENOMINATOR *
@@ -343,6 +502,7 @@ contract UniswapV2Pair is ERC20 {
             }
 
             if (
+                checkTolerance &&
                 amountInWithFeeProduct >
                 (currentK *
                     (BASIS_POINTS_UPPER_BOUND + _toleranceBasisPoints)) /
@@ -350,16 +510,8 @@ contract UniswapV2Pair is ERC20 {
             ) {
                 revert OverpayedForSwap();
             }
-        }
 
-        _update(balance0, balance1);
-        emit Swap(
-            msg.sender,
-            _amount0Out,
-            _amount1Out,
-            amount1In,
-            amount0In,
-            _to
-        );
+            return calculations;
+        }
     }
 }

@@ -10,6 +10,8 @@ import {FixedPointMathLib} from "@solady/utils@v0.0.217/FixedPointMathLib.sol";
 import {BaseTest} from "./BaseTest.t.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts@v5.0.2/token/ERC20/extensions/IERC20Metadata.sol";
 import {UQ112x112} from "../src/UQ112x112.sol";
+import {FlashBorrowerMock} from "../mocks/FlashBorrowerMock.sol";
+import {ERC20} from "@solady/tokens@v0.0.217/ERC20.sol";
 
 contract InternalFunctionsWrapper is UniswapV2Pair {
     constructor(address token0, address token1) UniswapV2Pair(token0, token1) {}
@@ -32,6 +34,9 @@ contract UniswapV2PairTest is BaseTest {
 
     address private constant USER1 = address(1);
     address private constant USER2 = address(2);
+
+    bytes32 private constant FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT =
+        keccak256("ERC3156FlashBorrower.onFlashLoan");
 
     function setUp() public {
         // fund addresses with ether
@@ -86,6 +91,25 @@ contract UniswapV2PairTest is BaseTest {
         assertEq(reserve0, usdcAmount);
         assertEq(reserve1, wethAmount);
 
+        _;
+    }
+
+    // happy path for getting a flash loan
+    modifier getFlashLoanWithToken(address token) {
+        vm.startPrank(USER2);
+        FlashBorrowerMock borrower = new FlashBorrowerMock(
+            address(pair),
+            USER2,
+            true,
+            FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT
+        );
+        uint256 flashLoanAmount = ERC20(token).balanceOf(address(pair));
+        uint256 fee = pair.flashFee(token, flashLoanAmount);
+
+        ERC20(token).transfer(address(borrower), fee);
+
+        pair.flashLoan(borrower, token, flashLoanAmount, "");
+        vm.stopPrank();
         _;
     }
 
@@ -500,7 +524,7 @@ contract UniswapV2PairTest is BaseTest {
             address(4),
             address(5)
         );
-        assertEq(wrapper.getFee(3333), 10);
+        assertEq(wrapper.getFee(3333), 11);
     }
 
     function test_GetFeeDoesntRoundUpWhenThereIsNoFractionPart() public {
@@ -509,6 +533,115 @@ contract UniswapV2PairTest is BaseTest {
             address(5)
         );
 
-        assertEq(wrapper.getFee(1000), 3);
+        assertEq(wrapper.getFee(997), 3);
+    }
+
+    function test_MaxFlashLoanReturns0IfTokenIsNotOneOfThePairTokens()
+        public
+        view
+    {
+        assertEq(pair.maxFlashLoan(address(1)), 0);
+    }
+
+    function test_MaxFlashLoanReturnsReserve0IfTokenIsToken0()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        assertEq(pair.maxFlashLoan(address(pair.token0())), pair.reserve0());
+    }
+
+    function test_MaxFlashLoanReturnsReserve1IfTokenIsToken1()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        assertEq(pair.maxFlashLoan(address(pair.token1())), pair.reserve1());
+    }
+
+    function test_FlashFeeRevertsIfTokenIsNotSupported() public {
+        vm.expectRevert(UniswapV2Pair.TokenNotSupportedForFlashLoan.selector);
+        pair.flashFee(address(1), 0);
+    }
+
+    function test_FlashFeeReturns0IfAmountIs0() public view {
+        assertEq(pair.flashFee(address(pair.token0()), 0), 0);
+    }
+
+    function test_FlashFeeReturnsCorrectAmount() public view {
+        assertEq(pair.flashFee(address(pair.token0()), 997), 3);
+        assertEq(pair.flashFee(address(pair.token0()), 995), 3);
+    }
+
+    function test_FlashLoanWorksAsExpectedWithGettingUSDCAsLoan()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        vm.startPrank(USER2);
+        FlashBorrowerMock borrower = new FlashBorrowerMock(
+            address(pair),
+            USER2,
+            true,
+            FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT
+        );
+        uint256 usdcFlashLoanAmount = usdc.balanceOf(address(pair));
+        uint256 fee = pair.flashFee(address(usdc), usdcFlashLoanAmount);
+
+        usdc.transfer(address(borrower), fee);
+
+        pair.flashLoan(borrower, address(usdc), usdcFlashLoanAmount, "");
+    }
+
+    function test_FlashLoanWorksAsExpectedWithGettingWETHAsLoan()
+        public
+        poolInitialized10ETH1000USDC
+        getFlashLoanWithToken(address(weth))
+    {}
+
+    function test_FlashLoanRevertsIfUserDoesntPayFee()
+        public
+        poolInitialized10ETH1000USDC
+        getFlashLoanWithToken(address(usdc))
+    {}
+
+    function test_FlashLoanRevertsIfBorrowerDoesntReturnExpectedHash()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        vm.startPrank(USER2);
+        FlashBorrowerMock borrower = new FlashBorrowerMock(
+            address(pair),
+            USER2,
+            true,
+            bytes32(0)
+        );
+        uint256 usdcFlashLoanAmount = usdc.balanceOf(address(pair));
+        uint256 fee = pair.flashFee(address(usdc), usdcFlashLoanAmount);
+
+        usdc.transfer(address(borrower), fee);
+
+        vm.expectRevert(
+            UniswapV2Pair.FlashLoanReceiverDoesntImplementOnFlashLoan.selector
+        );
+        pair.flashLoan(borrower, address(usdc), usdcFlashLoanAmount, "");
+    }
+
+    function test_FlashLoanRevertsIfBorrowerRequestFlashLoanWithTokenDifferentFromTheTwoOfThePair()
+        public
+        poolInitialized10ETH1000USDC
+    {
+        vm.startPrank(USER2);
+        FlashBorrowerMock borrower = new FlashBorrowerMock(
+            address(pair),
+            USER2,
+            true,
+            bytes32(0)
+        );
+
+        vm.expectRevert(UniswapV2Pair.TokenNotSupportedForFlashLoan.selector);
+        pair.flashLoan(
+            borrower,
+            address(uint160(uint256(keccak256("test token")))),
+            1,
+            ""
+        );
     }
 }
