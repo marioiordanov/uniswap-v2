@@ -108,6 +108,8 @@ contract UniswapV2PairTest is BaseTest {
 
         ERC20(token).transfer(address(borrower), fee);
 
+        vm.expectEmit(true, true, false, false, address(pair));
+        emit UniswapV2Pair.Swap(USER2, 0, 0, 0, 0, address(borrower));
         pair.flashLoan(borrower, token, flashLoanAmount, "");
         vm.stopPrank();
         _;
@@ -449,6 +451,8 @@ contract UniswapV2PairTest is BaseTest {
         //  9999999993581818181718181818246000
 
         usdc.transfer(address(pair), usdcInBeforeFee);
+        vm.expectEmit(true, true, false, false, address(pair));
+        emit UniswapV2Pair.Swap(USER1, 0, 0, 0, 0, USER1);
         pair.swap(0, wethOut, USER1, 1);
     }
 
@@ -574,21 +578,8 @@ contract UniswapV2PairTest is BaseTest {
     function test_FlashLoanWorksAsExpectedWithGettingUSDCAsLoan()
         public
         poolInitialized10ETH1000USDC
-    {
-        vm.startPrank(USER2);
-        FlashBorrowerMock borrower = new FlashBorrowerMock(
-            address(pair),
-            USER2,
-            true,
-            FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT
-        );
-        uint256 usdcFlashLoanAmount = usdc.balanceOf(address(pair));
-        uint256 fee = pair.flashFee(address(usdc), usdcFlashLoanAmount);
-
-        usdc.transfer(address(borrower), fee);
-
-        pair.flashLoan(borrower, address(usdc), usdcFlashLoanAmount, "");
-    }
+        getFlashLoanWithToken(address(usdc))
+    {}
 
     function test_FlashLoanWorksAsExpectedWithGettingWETHAsLoan()
         public
@@ -599,8 +590,18 @@ contract UniswapV2PairTest is BaseTest {
     function test_FlashLoanRevertsIfUserDoesntPayFee()
         public
         poolInitialized10ETH1000USDC
-        getFlashLoanWithToken(address(usdc))
-    {}
+    {
+        vm.startPrank(USER2);
+        FlashBorrowerMock borrower = new FlashBorrowerMock(
+            address(pair),
+            USER2,
+            false,
+            FLASH_BORROWER_ON_FLASH_LOAN_EXPECTED_RESULT
+        );
+        uint256 flashLoanAmount = usdc.balanceOf(address(pair));
+        vm.expectRevert(ERC20.InsufficientAllowance.selector);
+        pair.flashLoan(borrower, address(usdc), flashLoanAmount, "");
+    }
 
     function test_FlashLoanRevertsIfBorrowerDoesntReturnExpectedHash()
         public

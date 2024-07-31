@@ -73,7 +73,7 @@ contract UniswapV2Pair is ERC20, IERC3156FlashLender {
         uint256 amount1Out,
         uint256 amount1In,
         uint256 amount0In,
-        address to
+        address indexed to
     );
 
     // errors
@@ -198,7 +198,7 @@ contract UniswapV2Pair is ERC20, IERC3156FlashLender {
 
             _update(calculations.balance0, calculations.balance1);
             emit Swap(
-                receiverAddress,
+                msg.sender,
                 amount0Out,
                 amount1Out,
                 calculations.amount1In,
