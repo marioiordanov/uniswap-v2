@@ -14,9 +14,12 @@ import {IERC3156FlashBorrower} from "@openzeppelin/contracts@v5.0.2/interfaces/I
 contract UniswapV2Pair is ERC20, IERC3156FlashLender {
     using FixedPointMathLib for uint256;
     using UQ112x112 for uint224;
+    // reentrancy state enum the first value is for gas optimizations
+    // to avoid setting in each function call the state from 0 to non zero
     enum ReentrancyState {
-        NON_ENTERED,
-        ENTERED
+        NON_USED_VALUE_FOR_GAS_OPTIMIZATION, // 0
+        NON_ENTERED, // 1
+        ENTERED // 2
     }
 
     struct SwapCalculations {
@@ -392,7 +395,7 @@ contract UniswapV2Pair is ERC20, IERC3156FlashLender {
         uint256 _amount0Out,
         uint256 _amount1Out,
         address _to,
-        uint16 _toleranceBasisPoints
+        uint256 _toleranceBasisPoints
     ) internal nonReentrant {
         if (_toleranceBasisPoints > BASIS_POINTS_UPPER_BOUND) {
             revert InvalidBasisPoints();
@@ -463,7 +466,7 @@ contract UniswapV2Pair is ERC20, IERC3156FlashLender {
         uint256 _amount0Out,
         uint256 _amount1Out,
         bool checkTolerance,
-        uint16 _toleranceBasisPoints
+        uint256 _toleranceBasisPoints
     ) private view returns (SwapCalculations memory calculations) {
         // stack too deep error
         {
